@@ -1,51 +1,104 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+#include <sched.h>
 
-int valor_compartilhado = 0; // variável global compartilhada por todas as threads
+#define NUM_HILOS 8            // ajustável
+#define TOTAL_PUNTOS 1000000000ULL  // 1e9 pontos por hilo (ajustável)
+#define YIELD_INTERVAL 100000   // a cada n iterações, hilos generosos cedem a CPU
 
-void* funcao_thread_0(void* arg) {
+typedef struct {
+    int id;
+    int generoso;     // 1 = par (generoso), 0 = ímpar (competitivo)
+    double pi;
+    double segundos;
+} Stat;
 
-    int valor_local_t0 = 10; // variável local: privada desta thread
+static Stat stats[NUM_HILOS];
 
-    printf("valor_compartilhado inicial = %d e valor_local_t0 é: %d\n",
-           valor_compartilhado, valor_local_t0);
-
-    valor_compartilhado = 42;     // altera a global (visível às outras threads)
-    valor_local_t0 = 777;         // altera apenas o local desta thread
-
-    printf("[T0] mudou: valor_compartilhado para: %d e valor_local_t0 para: %d\n",
-           valor_compartilhado, valor_local_t0); //printa os valores alterados mantendo o fluxo do compartilhamento
-    return NULL;
+static inline unsigned int xorshift32(unsigned int *s) {
+    unsigned int x = *s;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *s = x;
+    return x;
 }
 
-void* funcao_thread_1(void* arg) {
+void* worker(void* arg) {
+    int id = *(int*)arg;
+    free(arg);
 
-    int valor_local_t1 = 20; // outra pilha, outro 'local'
-    printf("valor_compartilhado vindo de T0 = %d e valor_local_t1 é: %d\n",
-           valor_compartilhado, valor_local_t1);
+    unsigned int seed = (unsigned int)time(NULL) ^ (unsigned int)(id * 2654435761u);
 
-           valor_compartilhado = 100; // altera a global novamente
-           valor_local_t1 = 888;       // altera apenas o local desta thread
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    printf("[T1] mudou: valor_compartilhado para: %d e valor_local_t1 para: %d\n",
-           valor_compartilhado, valor_local_t1); //printa os valores alterados mantendo o fluxo do compartilhamento
-    return NULL;
+    unsigned long long dentro = 0ULL;
+    int generoso = (id % 2 == 0);
+
+    for (unsigned long long i = 0; i < TOTAL_PUNTOS; i++) {
+        // PRNG em [0,1)
+        double x = (double)xorshift32(&seed) / (double)UINT_MAX;
+        double y = (double)xorshift32(&seed) / (double)UINT_MAX;
+
+        if (x*x + y*y <= 1.0) dentro++;
+
+        if (generoso && (i % YIELD_INTERVAL == 0)) {
+            sched_yield();
+        }
+    }
+
+    double pi = 4.0 * (double)dentro / (double)TOTAL_PUNTOS;
+
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double dt = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+
+    stats[id].id = id;
+    stats[id].generoso = generoso;
+    stats[id].pi = pi;
+    stats[id].segundos = dt;
+
+    pthread_exit(NULL);
 }
 
-int main(void) {
-    
-    pthread_t thread0, thread1;
+static int cmp_stats(const void* a, const void* b) {
+    const Stat* A = (const Stat*)a;
+    const Stat* B = (const Stat*)b;
+    if (A->segundos < B->segundos) return -1;
+    if (A->segundos > B->segundos) return 1;
+    return 0;
+}
 
-    printf("[MAIN] inicio: valor_compartilhado = %d\n", valor_compartilhado);
+int main() {
+    printf("Aproximación de π con %d hilos (TOTAL_PUNTOS por hilo = %llu)\n\n", NUM_HILOS, (unsigned long long)TOTAL_PUNTOS);
 
-    // Executa T0 primeiro para alterar a global
-    pthread_create(&thread0, NULL, funcao_thread_0, NULL);
-    pthread_join(thread0, NULL);
+    pthread_t th[NUM_HILOS];
 
-    // Depois T1 lê a global já alterada e altera de novo
-    pthread_create(&thread1, NULL, funcao_thread_1, NULL);
-    pthread_join(thread1, NULL);
+    for (int i = 0; i < NUM_HILOS; i++) {
+        int* pid = (int*)malloc(sizeof(int));
+        *pid = i;
+        pthread_create(&th[i], NULL, worker, pid);
+    }
 
-    printf("[MAIN] fim: valor_compartilhado = %d\n", valor_compartilhado);
+    for (int i = 0; i < NUM_HILOS; i++) {
+        pthread_join(th[i], NULL);
+    }
+
+    // ordenar por tempo crescente
+    qsort(stats, NUM_HILOS, sizeof(Stat), cmp_stats);
+
+    printf("Tabla final (ordenada por tiempo creciente):\n");
+    printf("Hilo\tTipo\t\tTiempo(s)\tπ_aprox\n");
+    for (int i = 0; i < NUM_HILOS; i++) {
+        printf("%d\t%s\t%.6f\t%.10f\n",
+               stats[i].id,
+               stats[i].generoso ? "Generoso" : "Competitivo",
+               stats[i].segundos,
+               stats[i].pi);
+    }
+
     return 0;
 }
