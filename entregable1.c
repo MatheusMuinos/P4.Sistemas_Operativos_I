@@ -8,13 +8,13 @@
 #include <math.h>
 #include <sched.h>   // para sched_yield()
 
-#define NUM_HILOS 100          // número de hilos que voy crear (modificable)
+#define NUM_HILOS 100        // número de hilos que voy crear (modificable)
 #define TOTAL_PUNTOS 100000000   // número de puntos generados por hilo
-#define YIELD_INTERVAL 1000   // frequencia en que los hilos generosos ceden la CPU
+#define YIELD_INTERVAL 1000000000000  // frequencia en que los hilos generosos ceden la CPU
 
 void* calcular_pi(void* arg) {
     int id = *(int*)arg; // id del hilo creado (pares = generosos, impares = competitivos)
-    unsigned int seed = time(NULL) ^ id;  // semilla diferente por hilo con un XOR con el id unico, para rand_r()
+    unsigned int seed = time(NULL) ^ id;  // semilla diferente por hilo con un usando el id que es unico para cada
 
     struct timeval inicio, fin;
     gettimeofday(&inicio, NULL); // medir el tiempo de inicio
@@ -49,6 +49,11 @@ void* calcular_pi(void* arg) {
 }
 
 int main() {
+// todos os hilos compartilham o mesmo espaço de endereços (globais/heap), mas cada um tem stack e contexto próprios; o SO coloca cada hilo na fila de prontos.
+// como nao ha variaveis globais, cada hilo tem sua propria copia das variaveis locais (stack) e nao precisa do mutex
+// Paralelismo acontece quando o número de hilos é menor ou igual ao número de núcleos, permitindo que vários hilos rodem realmente ao mesmo tempo.
+// Já concorrência acontece quando há mais hilos do que núcleos, e o sistema operacional precisa alternar entre eles.
+    printf("PID de este processo: %d\n", getpid());
     printf("Aproximación de π con %d hilos.\n\n", NUM_HILOS);
 
     pthread_t hilos[NUM_HILOS]; // arreglo para almacenar los identificadores de los hilos
@@ -56,12 +61,13 @@ int main() {
     for (int i = 0; i < NUM_HILOS; i++) { // crear los hilos
         int* id = malloc(sizeof(int));
         *id = i;
-        pthread_create(&hilos[i], NULL, calcular_pi, id); // pasar el id unico a cada hilo y hacer que cada uno ejecute la función calcular_pi
+        pthread_create(&hilos[i], NULL, calcular_pi, id); // pasar el id unico a cada hilo y hacer que cada uno ejecute la función calcular_pi con su valor de id
     }
 
     for (int i = 0; i < NUM_HILOS; i++)
         pthread_join(hilos[i], NULL); // esperar a que todos los hilos terminen
 
     printf("\nTodos los hilos han terminado.\n");
+    getchar(); // esperar a que el usuario presione una tecla antes de salir
     return 0;
 }
